@@ -56,7 +56,13 @@ class DouYinLogin(AbstractLogin):
             The verification accuracy of the slider verification is not very good... If there are no special requirements, it is recommended not to use Douyin login, or use cookie login
         """
 
-        # popup login dialog
+        # Cookie login bypasses UI interaction entirely
+        if config.LOGIN_TYPE == "cookie":
+            await self.login_by_cookies()
+            utils.logger.info("[DouYinLogin.begin] cookie login done, skipping UI interaction ...")
+            return
+
+        # popup login dialog (only for qrcode/phone login)
         await self.popup_login_dialog()
 
         # select login type
@@ -64,8 +70,6 @@ class DouYinLogin(AbstractLogin):
             await self.login_by_qrcode()
         elif config.LOGIN_TYPE == "phone":
             await self.login_by_mobile()
-        elif config.LOGIN_TYPE == "cookie":
-            await self.login_by_cookies()
         else:
             raise ValueError("[DouYinLogin.begin] Invalid Login Type Currently only supported qrcode or phone or cookie ...")
 
@@ -116,9 +120,38 @@ class DouYinLogin(AbstractLogin):
             await self.context_page.wait_for_selector(dialog_selector, timeout=1000 * 10)
         except Exception as e:
             utils.logger.error(f"[DouYinLogin.popup_login_dialog] login dialog box does not pop up automatically, error: {e}")
-            utils.logger.info("[DouYinLogin.popup_login_dialog] login dialog box does not pop up automatically, we will manually click the login button")
-            login_button_ele = self.context_page.locator("xpath=//p[text() = '登录']")
-            await login_button_ele.click()
+            # Screenshot to check current page status
+            try:
+                await self.context_page.screenshot(path="logs/douyin_login_page.png", full_page=False)
+                current_url = self.context_page.url
+                current_title = await self.context_page.title()
+                utils.logger.info(f"[DouYinLogin.popup_login_dialog] page screenshot saved: logs/douyin_login_page.png, url: {current_url}, title: {current_title}")
+            except Exception as ss_err:
+                utils.logger.warning(f"[DouYinLogin.popup_login_dialog] screenshot failed: {ss_err}")
+            # Try to manually click the login button
+            utils.logger.info("[DouYinLogin.popup_login_dialog] login dialog box does not pop up automatically, trying manual click...")
+            selectors = [
+                "xpath=//p[text() = '登录']",
+                "xpath=//span[contains(text(), '登录')]",
+                "xpath=//button[contains(text(), '登录')]",
+                "xpath=//div[contains(@class, 'login')]//span",
+            ]
+            clicked = False
+            for sel in selectors:
+                try:
+                    ele = self.context_page.locator(sel).first
+                    await ele.click(timeout=3000)
+                    utils.logger.info(f"[DouYinLogin.popup_login_dialog] clicked: {sel}")
+                    clicked = True
+                    await asyncio.sleep(0.5)
+                    # Wait again for login panel
+                    await self.context_page.wait_for_selector(dialog_selector, timeout=5000)
+                    utils.logger.info("[DouYinLogin.popup_login_dialog] login dialog appeared after manual click")
+                    break
+                except Exception:
+                    continue
+            if not clicked:
+                utils.logger.error("[DouYinLogin.popup_login_dialog] all login selectors failed, page may have changed")
             await asyncio.sleep(0.5)
 
     async def login_by_qrcode(self):
@@ -272,3 +305,6 @@ class DouYinLogin(AbstractLogin):
                 'domain': ".douyin.com",
                 'path': "/"
             }])
+        # Reload the page so cookies take effect
+        await self.context_page.reload()
+        utils.logger.info("[DouYinLogin.login_by_cookies] cookies added and page reloaded")
